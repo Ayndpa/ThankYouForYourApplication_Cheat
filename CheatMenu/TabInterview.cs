@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using ResumePlease;
 using ResumePlease.Interview;
@@ -7,6 +8,7 @@ using ResumePlease.Interview.Document.Faults;
 using ResumePlease.Interview.Inspect;
 using ResumePlease.Interview.InspectPoints;
 using ResumePlease.Interview.Level;
+using ResumePlease.Interview.Level.Requirements;
 using UnityEngine;
 using XDEngine.Core.Singletons;
 
@@ -144,143 +146,323 @@ namespace CheatMenu
         // ════════════════════════════════════════════
 
         /// <summary>
-        /// 反射获取 BasicInspectController 的所有私有触发模型列表。
+        /// 通过反射获取 BasicInspectController 的指定私有触发模型列表。
         /// </summary>
-        private BaseTriggerModel[] GetAllTriggerModels(BasicInspectController controller)
+        private List<T> GetTriggerModelList<T>(BasicInspectController controller, string fieldName)
         {
-            var type = typeof(BasicInspectController);
-            var flags = BindingFlags.NonPublic | BindingFlags.Instance;
-            var models = new List<BaseTriggerModel>();
-
-            string[] fieldNames = { "_triggerModel1", "_triggerModel2", "_triggerModel3",
-                                    "_triggerModel4", "_customTriggerModel", "_qaTriggerModel" };
-
-            foreach (var fname in fieldNames)
-            {
-                var list = type.GetField(fname, flags)?.GetValue(controller) as System.Collections.IEnumerable;
-                if (list != null)
-                    foreach (var m in list)
-                        if (m is BaseTriggerModel btm) models.Add(btm);
-            }
-
-            return models.ToArray();
+            var field = typeof(BasicInspectController).GetField(fieldName,
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            return (field?.GetValue(controller) as List<T>) ?? new List<T>();
         }
 
         /// <summary>
-        /// 瞬间遍历所有可检查组合，找到匹配项并自动触发感谢信。
+        /// 通过反射调用 BasicInspectController 的私有 TriggerInspectPoint 方法。
+        /// </summary>
+        private bool TriggerInspectPointViaReflection(BasicInspectController controller, BaseTriggerModel model)
+        {
+            var method = typeof(BasicInspectController).GetMethod("TriggerInspectPoint",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            if (method == null)
+            {
+                _scanLog.Add("[ERROR] 无法找到 TriggerInspectPoint 方法");
+                return false;
+            }
+            method.Invoke(controller, new object[] { model });
+            return true;
+        }
+
+        /// <summary>
+        /// 直接匹配触发模型并触发感谢信。
+        /// 匹配逻辑与游戏 BasicInspectController.TakeInspect 的内部路由一致，但绕过路由直接匹配。
         /// </summary>
         private void PerformScan(CharacterEntity character)
         {
             _scanLog.Clear();
             _scanResult = "";
 
+            if (!SingletonEntity<InterviewManager>.HasInstance())
+            {
+                _scanLog.Add("[ERROR] 当前不在面试场景");
+                _scanResult = "✗ 不在面试场景";
+                _scanResultTimer = 3f;
+                return;
+            }
+
             var inspectManager = SingletonEntity<InterviewManager>.Instance.inspectManager;
             var basicController = inspectManager.BasicInspectController;
             var faultModel = character.faultModel;
 
-            // 加载所有注册的触发规则
-            var allModels = GetAllTriggerModels(basicController);
-            _scanLog.Add($"[SCAN] 加载 {allModels.Length} 条检查规则");
-
-            // 收集所有缺陷字段
+            // ── 收集缺陷字段和需求 ──
             var allFaultFields = new List<IDocumentField>();
             foreach (var docFault in faultModel.documentFaultList)
             {
                 if (docFault is FaultTemplateDocumentFaultComponent ftc)
                     allFaultFields.AddRange(ftc.faultFields);
             }
-
             var allFaultReqs = faultModel.requirementList;
-            _scanLog.Add($"[SCAN] 发现 {allFaultReqs.Count} 个需求缺陷, {allFaultFields.Count} 个字段缺陷");
 
-            bool found = false;
+            _scanLog.Add($"[SCAN] {allFaultReqs.Count} 个需求缺陷, {allFaultFields.Count} 个字段缺陷");
 
-            // ── 第一轮：单需求组合 ──
-            _scanLog.Add("── 需求检查 ──");
-            foreach (var req in allFaultReqs)
+            // ── 加载各触发模型列表 ──
+            var customModels = GetTriggerModelList<CustomFieldTriggerModel>(basicController, "_customTriggerModel");
+            var twoFieldModels = GetTriggerModelList<TwoFieldTriggerModel>(basicController, "_triggerModel1");
+            var fieldReqModels = GetTriggerModelList<FieldAndRequirementTriggerModel>(basicController, "_triggerModel2");
+            var reqModels = GetTriggerModelList<RequirementTriggerModel>(basicController, "_triggerModel3");
+            var globalModels = GetTriggerModelList<GlobalFieldTriggerModel>(basicController, "_triggerModel4");
+
+            _scanLog.Add($"[SCAN] 规则: Custom={customModels.Count} TwoField={twoFieldModels.Count} " +
+                         $"FieldReq={fieldReqModels.Count} Req={reqModels.Count} Global={globalModels.Count}");
+
+            // ── 全局系统字段（游戏中 GlobalFieldTriggerModel.IsFieldTrigger 匹配的目标） ──
+            var lm = SingletonEntity<InterviewManager>.Instance.levelManager;
+            var globalFields = new List<IDocumentField>();
+            if (lm.currentDateDocumentField != null) globalFields.Add(lm.currentDateDocumentField);
+            if (lm.currentInterviewCharacterHeadImg != null) globalFields.Add(lm.currentInterviewCharacterHeadImg);
+
+            BaseTriggerModel matched = null;
+            string matchedTag = "";
+
+            // ── 优先级 1: CustomFieldTriggerModel（游戏中最先检查） ──
+            // 游戏中 TakeInspect 对每个字段/需求组合调用 Check(fields, requirement)
+            if (matched == null && customModels.Count > 0)
             {
-                string tag = $"REQ:{req.type}";
-                _scanLog.Add($"  ▸ {tag}");
+                _scanLog.Add("── Custom 检查 ──");
 
-                if (basicController.TakeInspect(new IDocumentField[0], req))
+                // 先尝试 CheckCharacter（快速路径）
+                foreach (var m in customModels)
                 {
-                    _scanLog.Add($"  ✓ 命中 {tag}");
-                    found = true;
-                    break;
-                }
-            }
-
-            // ── 第二轮：字段 + 需求组合 ──
-            if (!found && allFaultFields.Count > 0 && allFaultReqs.Count > 0)
-            {
-                _scanLog.Add("── 字段+需求检查 ──");
-                foreach (var field in allFaultFields)
-                {
-                    foreach (var req in allFaultReqs)
+                    if (m.CheckCharacter(character))
                     {
-                        string tag = $"FIELD+REQ:{field.GetFieldEnum()}+{req.type}";
-                        _scanLog.Add($"  ▸ {tag}");
-
-                        if (basicController.TakeInspect(new[] { field }, req))
-                        {
-                            _scanLog.Add($"  ✓ 命中 {tag}");
-                            found = true;
-                            break;
-                        }
+                        matched = m;
+                        matchedTag = $"CUSTOM_CHAR:{m.pointType}";
+                        break;
                     }
-                    if (found) break;
                 }
+
+                // 再尝试 Check(fields, requirement) 的所有组合
+                if (matched == null)
+                {
+                    // 构建所有要尝试的字段组合
+                    var customFieldSets = new List<(IDocumentField[] fields, string tag)>();
+                    customFieldSets.Add((new IDocumentField[0], "CUSTOM:∅"));
+                    foreach (var f in allFaultFields)
+                        customFieldSets.Add((new[] { f }, $"CUSTOM:{f.GetFieldEnum()}"));
+                    for (int i = 0; i < allFaultFields.Count; i++)
+                        for (int j = i + 1; j < allFaultFields.Count; j++)
+                            customFieldSets.Add((new[] { allFaultFields[i], allFaultFields[j] },
+                                $"CUSTOM:{allFaultFields[i].GetFieldEnum()}+{allFaultFields[j].GetFieldEnum()}"));
+                    // 包含全局系统字段的组合
+                    foreach (var gf in globalFields)
+                        foreach (var ff in allFaultFields)
+                            customFieldSets.Add((new[] { ff, gf }, $"CUSTOM:{ff.GetFieldEnum()}+Global"));
+
+                    // 尝试每个字段组合 × 每个需求（含 null）
+                    var reqsToTry = new List<BaseRequirement>(allFaultReqs);
+                    reqsToTry.Add(null); // null requirement 也要尝试
+
+                    foreach (var (fields, tag) in customFieldSets)
+                    {
+                        foreach (var req in reqsToTry)
+                        {
+                            foreach (var m in customModels)
+                            {
+                                if (m.Check(fields, req))
+                                {
+                                    matched = m;
+                                    matchedTag = tag + (req != null ? $"+{req.type}" : "");
+                                    break;
+                                }
+                            }
+                            if (matched != null) break;
+                        }
+                        if (matched != null) break;
+                    }
+                }
+
+                if (matched != null)
+                    _scanLog.Add($"  ✓ 命中 {matchedTag}");
             }
 
-            // ── 第三轮：双字段组合 ──
-            if (!found && allFaultFields.Count >= 2)
+            // ── 优先级 2: 双字段路径（GlobalField 优先于 TwoField） ──
+            if (matched == null && allFaultFields.Count > 0)
             {
                 _scanLog.Add("── 双字段检查 ──");
-                for (int i = 0; i < allFaultFields.Count && !found; i++)
+
+                // 构建字段对：缺陷字段两两组合 + 缺陷字段与全局系统字段的组合
+                var fieldPairs = new List<(IDocumentField f1, IDocumentField f2, string tag)>();
+
+                // 缺陷字段两两组合
+                for (int i = 0; i < allFaultFields.Count; i++)
                 {
                     for (int j = i + 1; j < allFaultFields.Count; j++)
                     {
-                        string tag = $"FIELD×2:{allFaultFields[i].GetFieldEnum()}+{allFaultFields[j].GetFieldEnum()}";
-                        _scanLog.Add($"  ▸ {tag}");
+                        var tag = $"F×F:{allFaultFields[i].GetFieldEnum()}+{allFaultFields[j].GetFieldEnum()}";
+                        fieldPairs.Add((allFaultFields[i], allFaultFields[j], tag));
+                    }
+                }
 
-                        if (basicController.TakeInspect(new[] { allFaultFields[i], allFaultFields[j] }, null))
+                // 缺陷字段 × 全局系统字段
+                foreach (var gf in globalFields)
+                {
+                    foreach (var ff in allFaultFields)
+                    {
+                        var tag = $"F×G:{ff.GetFieldEnum()}+Global";
+                        fieldPairs.Add((ff, gf, tag));
+                    }
+                }
+
+                foreach (var (f1, f2, tag) in fieldPairs)
+                {
+                    // 至少一个字段是 fault（游戏的 TakdInspect(field1, field2) 要求）
+                    if (!f1.IsFault && !f2.IsFault) continue;
+
+                    // GlobalField 优先检查
+                    foreach (var gm in globalModels)
+                    {
+                        if (gm.IsFieldTrigger(f1) || gm.IsFieldTrigger(f2))
                         {
-                            _scanLog.Add($"  ✓ 命中 {tag}");
-                            found = true;
+                            _scanLog.Add($"  ✓ 命中 GlobalField: {tag}");
+                            matched = gm;
+                            matchedTag = tag;
                             break;
                         }
                     }
+                    if (matched != null) break;
+
+                    // TwoField 检查（两个字段类型必须相同）
+                    if (f1.GetType() == f2.GetType())
+                    {
+                        foreach (var tf in twoFieldModels)
+                        {
+                            if (tf.fieldType == f1.GetType())
+                            {
+                                _scanLog.Add($"  ✓ 命中 TwoField: {tag}");
+                                matched = tf;
+                                matchedTag = tag;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched != null) break;
                 }
             }
 
-            // ── 第四轮：全局字段单独触发 ──
-            if (!found && allFaultFields.Count > 0)
+            // ── 优先级 3: 字段 + 需求路径（GlobalField 优先于 FieldAndRequirement） ──
+            if (matched == null && allFaultFields.Count > 0 && allFaultReqs.Count > 0)
             {
-                _scanLog.Add("── 全局字段检查 ──");
-                foreach (var field in allFaultFields)
+                _scanLog.Add("── 字段+需求检查 ──");
+
+                // 包含缺陷字段和全局系统字段
+                var searchFields = new List<IDocumentField>(allFaultFields);
+                searchFields.AddRange(globalFields);
+
+                foreach (var field in searchFields)
                 {
-                    string tag = $"GLOBAL:{field.GetFieldEnum()}";
+                    foreach (var req in allFaultReqs)
+                    {
+                        var tag = $"F+R:{field.GetFieldEnum()}+{req.type}";
+                        _scanLog.Add($"  ▸ {tag}");
+
+                        // GlobalField 优先检查
+                        foreach (var gm in globalModels)
+                        {
+                            if (gm.requirement != null && gm.IsFieldTrigger(field) && gm.requirement == req)
+                            {
+                                _scanLog.Add($"  ✓ 命中 GlobalField: {tag}");
+                                matched = gm;
+                                matchedTag = tag;
+                                break;
+                            }
+                        }
+                        if (matched != null) break;
+
+                        // FieldAndRequirement 检查
+                        foreach (var fr in fieldReqModels)
+                        {
+                            if (fr.fieldType == field.GetType() && fr.requirement == req)
+                            {
+                                _scanLog.Add($"  ✓ 命中 FieldReq: {tag}");
+                                matched = fr;
+                                matchedTag = tag;
+                                break;
+                            }
+                        }
+                        if (matched != null) break;
+                    }
+                    if (matched != null) break;
+                }
+            }
+
+            // ── 优先级 4: 纯需求路径 ──
+            // 游戏的 GetWarningLabelId 只检查需求就返回匹配，说明 FieldAndRequirement 模型
+            // 也可以仅通过需求匹配（不需要字段缺陷存在）。这里复刻该行为。
+            if (matched == null && allFaultReqs.Count > 0)
+            {
+                _scanLog.Add("── 纯需求检查 ──");
+                foreach (var req in allFaultReqs)
+                {
+                    var tag = $"REQ:{req.type}";
                     _scanLog.Add($"  ▸ {tag}");
 
-                    if (basicController.TakeInspect(new[] { field }, null))
+                    // 先检查 RequirementTriggerModel
+                    foreach (var rm in reqModels)
                     {
-                        _scanLog.Add($"  ✓ 命中 {tag}");
-                        found = true;
-                        break;
+                        if (rm.requirement == req)
+                        {
+                            _scanLog.Add($"  ✓ 命中 Requirement: {tag}");
+                            matched = rm;
+                            matchedTag = tag;
+                            break;
+                        }
                     }
+                    if (matched != null) break;
+
+                    // 再检查 FieldAndRequirementTriggerModel（仅按需求匹配，与 GetWarningLabelId 一致）
+                    foreach (var fr in fieldReqModels)
+                    {
+                        if (fr.requirement == req)
+                        {
+                            _scanLog.Add($"  ✓ 命中 FieldReq(仅需求): {tag}");
+                            matched = fr;
+                            matchedTag = tag;
+                            break;
+                        }
+                    }
+                    if (matched != null) break;
+
+                    // 最后检查 GlobalFieldTriggerModel（仅按需求匹配）
+                    foreach (var gm in globalModels)
+                    {
+                        if (gm.requirement == req)
+                        {
+                            _scanLog.Add($"  ✓ 命中 GlobalReq(仅需求): {tag}");
+                            matched = gm;
+                            matchedTag = tag;
+                            break;
+                        }
+                    }
+                    if (matched != null) break;
                 }
             }
 
             // ── 结果处理 ──
-            if (found && inspectManager.waittingTriggerModel != null)
+            if (matched != null)
             {
-                var pt = inspectManager.waittingTriggerModel.pointType;
-                _scanResult = $"✓ 感谢信已生成 [{pt}]，等待动画...";
-                _scanLog.Add($"[DONE] 检查点 {pt} 已触发，等待弹出动画");
+                if (TriggerInspectPointViaReflection(basicController, matched)
+                    && inspectManager.waittingTriggerModel != null)
+                {
+                    var pt = inspectManager.waittingTriggerModel.pointType;
+                    _scanResult = $"✓ 感谢信已生成 [{pt}]，等待动画...";
+                    _scanLog.Add($"[DONE] 检查点 {pt} 已触发 ({matchedTag})");
 
-                // 不立即激活，而是启动延迟计时器，让感谢信弹出动画先播放
-                _pendingActivation = true;
-                _activationTimer = _activationDelay;
+                    _pendingActivation = true;
+                    _activationTimer = _activationDelay;
+                }
+                else
+                {
+                    _scanResult = "⚠ 匹配成功但触发失败";
+                    _scanLog.Add("[ERROR] TriggerInspectPoint 调用失败或 waittingTriggerModel 为空");
+                }
             }
             else
             {
