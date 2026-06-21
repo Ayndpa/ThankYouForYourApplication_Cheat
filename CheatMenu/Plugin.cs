@@ -56,6 +56,11 @@ public class Plugin : BaseUnityPlugin
     private float _pulseTimer = 0f;
     private bool _lastCharHadFault = false;   // 追踪上一个角色是否有缺陷，防止重复扫描
 
+    // ── 扫描动画延迟激活 ──
+    private bool _pendingActivation = false;
+    private float _activationTimer = 0f;
+    private float _activationDelay = 0.6f;   // 等待感谢信弹出动画播放完毕
+
     // ── 样式 ──
     private GUISkin _skin;
     private GUISkin _defaultSkin;
@@ -140,6 +145,28 @@ public class Plugin : BaseUnityPlugin
         {
             _scanResultTimer -= Time.unscaledDeltaTime;
             if (_scanResultTimer <= 0f) _scanResult = "";
+        }
+
+        // 感谢信弹出动画播放完毕后，延迟激活检查点
+        if (_pendingActivation)
+        {
+            _activationTimer -= Time.unscaledDeltaTime;
+            if (_activationTimer <= 0f)
+            {
+                _pendingActivation = false;
+                if (SingletonEntity<InterviewManager>.HasInstance())
+                {
+                    var inspectManager = SingletonEntity<InterviewManager>.Instance.inspectManager;
+                    if (inspectManager.waittingTriggerModel != null)
+                    {
+                        var pt = inspectManager.waittingTriggerModel.pointType;
+                        inspectManager.ActivateTriggerPoint(pt);
+                        _scanResult = $"✓ 感谢信已激活 [{pt}]";
+                        _scanResultTimer = 5f;
+                        PlayThankYouSound();
+                    }
+                }
+            }
         }
 
         if (_statusTimer > 0f)
@@ -1003,10 +1030,12 @@ public class Plugin : BaseUnityPlugin
         if (found && inspectManager.waittingTriggerModel != null)
         {
             var pt = inspectManager.waittingTriggerModel.pointType;
-            inspectManager.ActivateTriggerPoint(pt);
-            _scanResult = $"✓ 感谢信已激活 [{pt}]";
-            _scanLog.Add($"[DONE] 检查点 {pt} 已激活");
-            PlayThankYouSound();
+            _scanResult = $"✓ 感谢信已生成 [{pt}]，等待动画...";
+            _scanLog.Add($"[DONE] 检查点 {pt} 已触发，等待弹出动画");
+
+            // 不立即激活，而是启动延迟计时器，让感谢信弹出动画先播放
+            _pendingActivation = true;
+            _activationTimer = _activationDelay;
         }
         else
         {
