@@ -45,6 +45,7 @@ public class Plugin : BaseUnityPlugin
     private bool _freezeOT = false;
     private bool _autoHire = false;
     private bool _speedHack = false;
+    private bool _pauseGame = false;
     private float _speedMultiplier = 3f;
 
     // ── 自动感谢信 ──
@@ -103,7 +104,9 @@ public class Plugin : BaseUnityPlugin
             if (gd != null) gd.consecutiveOTDays = 0;
         }
 
-        if (_speedHack)
+        if (_pauseGame)
+            Time.timeScale = 0f;
+        else if (_speedHack)
             Time.timeScale = _speedMultiplier;
 
         if (_autoHire && SingletonEntity<InterviewManager>.HasInstance())
@@ -526,6 +529,10 @@ public class Plugin : BaseUnityPlugin
         {
             gd.BI = 0f; ShowStatus("BI 已归零");
         }
+        if (GUILayout.Button("最大(100)", _btnStyle, GUILayout.Width(100)))
+        {
+            gd.BI = 100f; ShowStatus("BI = 100 (最大)");
+        }
         GUILayout.EndHorizontal();
         GUILayout.EndVertical();
 
@@ -559,6 +566,54 @@ public class Plugin : BaseUnityPlugin
         if (GUILayout.Button("设置", _btnStyle, GUILayout.Width(80)))
         {
             if (int.TryParse(_dayInput, out int d)) { gd.currentDay = Mathf.Max(1, d); ShowStatus("天数 = " + gd.currentDay); }
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.EndVertical();
+
+        GUILayout.Space(8);
+
+        GUILayout.BeginVertical(_boxStyle);
+        GUILayout.Label("修改结算评价", _labelStyle);
+        GUILayout.Label("将评价强制设为 A（面试全员正确）", _smallLabel);
+        GUILayout.Space(4);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("当天评价 → A", _btnStyle))
+        {
+            // 修改当天进行中的面试记录
+            if (SingletonEntity<InterviewManager>.HasInstance())
+            {
+                var lm = SingletonEntity<InterviewManager>.Instance.levelManager;
+                if (lm != null)
+                {
+                    foreach (var r in lm.interviewRecordQueue)
+                    {
+                        if (!r.skip && string.IsNullOrEmpty(r.taskId))
+                        {
+                            r.resultType = InterviewRecord.ResultType.PerfectionHire;
+                            r.accurate = true;
+                        }
+                    }
+                }
+            }
+            // 修改当天已有结算记录
+            var today = gd.settlementHistories.Find(s => s.day == gd.currentDay);
+            if (today != null)
+            {
+                today.rating = SettlementRatingEnum.A;
+                today.accurateCount = today.totalCount;
+                today.faultCount = 0;
+            }
+            ShowStatus("当天评价已设为 A");
+        }
+        if (GUILayout.Button("全部历史 → A", _btnStyle))
+        {
+            foreach (var s in gd.settlementHistories)
+            {
+                s.rating = SettlementRatingEnum.A;
+                s.accurateCount = s.totalCount;
+                s.faultCount = 0;
+            }
+            ShowStatus("全部 " + gd.settlementHistories.Count + " 天评价已设为 A");
         }
         GUILayout.EndHorizontal();
         GUILayout.EndVertical();
@@ -695,6 +750,21 @@ public class Plugin : BaseUnityPlugin
 
     private void DrawTimeTab()
     {
+        // ── 时间暂停 ──
+        GUILayout.BeginVertical(_boxStyle);
+        GUILayout.Label("时间暂停", _labelStyle);
+        bool newPause = GUILayout.Toggle(_pauseGame, "暂停游戏时间", _toggleStyle);
+        if (newPause != _pauseGame)
+        {
+            _pauseGame = newPause;
+            if (!_pauseGame) Time.timeScale = _speedHack ? _speedMultiplier : 1f;
+        }
+        GUILayout.Label("暂停时游戏内时间完全冻结，UI动画不受影响", _smallLabel);
+        GUILayout.EndVertical();
+
+        GUILayout.Space(10);
+
+        // ── 游戏速度 ──
         GUILayout.BeginVertical(_boxStyle);
         GUILayout.Label("游戏速度", _labelStyle);
 
@@ -702,24 +772,30 @@ public class Plugin : BaseUnityPlugin
 
         GUILayout.Space(6);
         GUILayout.BeginHorizontal();
-        GUILayout.Label("倍率: " + _speedMultiplier.ToString("F1") + "x", GUILayout.Width(120));
-        _speedMultiplier = GUILayout.HorizontalSlider(_speedMultiplier, 1f, 10f);
+        GUILayout.Label("倍率: " + _speedMultiplier.ToString("F2") + "x", GUILayout.Width(120));
+        _speedMultiplier = GUILayout.HorizontalSlider(_speedMultiplier, 0.1f, 10f);
         GUILayout.EndHorizontal();
 
         GUILayout.Space(6);
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("1x", _btnStyle)) { _speedMultiplier = 1f; _speedHack = true; }
-        if (GUILayout.Button("2x", _btnStyle)) { _speedMultiplier = 2f; _speedHack = true; }
-        if (GUILayout.Button("3x", _btnStyle)) { _speedMultiplier = 3f; _speedHack = true; }
-        if (GUILayout.Button("5x", _btnStyle)) { _speedMultiplier = 5f; _speedHack = true; }
-        if (GUILayout.Button("10x", _btnStyle)) { _speedMultiplier = 10f; _speedHack = true; }
+        if (GUILayout.Button("0.1x", _btnStyle)) { _speedMultiplier = 0.1f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("0.25x", _btnStyle)) { _speedMultiplier = 0.25f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("0.5x", _btnStyle)) { _speedMultiplier = 0.5f; _speedHack = true; _pauseGame = false; }
+        GUILayout.EndHorizontal();
+        GUILayout.Space(4);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("1x", _btnStyle)) { _speedMultiplier = 1f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("2x", _btnStyle)) { _speedMultiplier = 2f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("3x", _btnStyle)) { _speedMultiplier = 3f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("5x", _btnStyle)) { _speedMultiplier = 5f; _speedHack = true; _pauseGame = false; }
+        if (GUILayout.Button("10x", _btnStyle)) { _speedMultiplier = 10f; _speedHack = true; _pauseGame = false; }
         GUILayout.EndHorizontal();
 
         GUILayout.Space(6);
         GUI.color = new Color(1f, 0.6f, 0.5f);
         if (GUILayout.Button("恢复原速", _btnStyle))
         {
-            _speedHack = false; _speedMultiplier = 1f; Time.timeScale = 1f;
+            _speedHack = false; _pauseGame = false; _speedMultiplier = 1f; Time.timeScale = 1f;
             ShowStatus("已恢复原速");
         }
         GUI.color = Color.white;
