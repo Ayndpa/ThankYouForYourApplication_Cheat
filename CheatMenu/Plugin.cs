@@ -238,7 +238,7 @@ namespace CheatMenu
         {
             // 标题栏
             GUILayout.BeginHorizontal();
-            GUILayout.Label("简历请收好 · 作弊菜单", _titleStyle, GUILayout.ExpandWidth(true));
+            GUILayout.Label("感谢你的投递 · 作弊菜单", _titleStyle, GUILayout.ExpandWidth(true));
             if (GUILayout.Button("✕", _btnStyle, GUILayout.Width(40), GUILayout.Height(30)))
                 _showMenu = false;
             GUILayout.EndHorizontal();
