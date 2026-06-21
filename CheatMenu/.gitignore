@@ -1,0 +1,33 @@
+# Build output
+/bin/
+/obj/
+
+# User-specific or local IDE files
+/.vs/
+/.idea/
+/.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.user
+*.vcxproj.user
+*.dbmdl
+*.opendb
+
+# Rider / ReSharper
+/.idea
+/JetBrains/
+/ReSharper/
+*.DotSettings.user
+
+# OS and editor noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Backup / temp files
+*~
+*.tmp
+*.swp
+

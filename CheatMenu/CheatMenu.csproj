@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>CheatMenu</AssemblyName>
+    <Product>ResumePlease Cheat Menu</Product>
+    <Version>1.0.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <NoWarn>BepInEx002</NoWarn>
+    <RestoreAdditionalProjectSources>
+      https://api.nuget.org/v3/index.json;
+      https://nuget.bepinex.dev/v3/index.json;
+      https://nuget.samboy.dev/v3/index.json
+    </RestoreAdditionalProjectSources>
+    <RootNamespace>CheatMenu</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" NoWarn="BepInEx002" />
+    <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.*" IncludeAssets="compile" />
+    <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" />
+    <PackageReference Include="UnityEngine.Modules" Version="5.6.0" IncludeAssets="compile" />
+  </ItemGroup>
+
+  <!-- 游戏本体 DLL 引用 -->
+  <PropertyGroup>
+    <GameDir>D:\Games\Thank You For Your - SteamGG.NET\ThankYouForYourApplication_Data\Managed</GameDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="XDEngine">
+      <HintPath>$(GameDir)\XDEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="XDEngine4unity">
+      <HintPath>$(GameDir)\XDEngine4unity.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(GameDir)\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- 编译后自动复制到 BepInEx 插件目录 -->
+  <PropertyGroup>
+    <BepInExPlugins>D:\Games\Thank You For Your - SteamGG.NET\BepInEx\plugins</BepInExPlugins>
+  </PropertyGroup>
+  <Target Name="CopyToPlugins" AfterTargets="Build">
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(BepInExPlugins)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="✔ $(AssemblyName).dll 已复制到 $(BepInExPlugins)" />
+  </Target>
+</Project>
